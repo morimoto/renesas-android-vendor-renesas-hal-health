@@ -16,15 +16,26 @@
  */
 
 cc_binary {
-    name: "android.hardware.health@1.0-service.renesas",
-    init_rc: ["android.hardware.health@1.0-service.renesas.rc"],
-
+    name: "android.hardware.health@2.0-service.renesas",
+    init_rc: ["android.hardware.health@2.0-service.renesas.rc"],
     proprietary: true,
     relative_install_path: "hw",
-
     srcs: [
-        "Health.cpp",
+        "HealthImpl.cpp",
         "HealthService.cpp",
+        "healthd_common.cpp",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-DHEALTHD_USE_HEALTH_2_0",
+    ],
+
+    static_libs: [
+        "android.hardware.health@1.0-convert",
+        "libbatterymonitor",
+        "libbinder",
     ],
 
     shared_libs: [
@@ -33,8 +44,17 @@ cc_binary {
         "libdl",
         "libbase",
         "libutils",
+        "libhwbinder",
+        "libhardware",
         "libhidlbase",
         "libhidltransport",
-        "android.hardware.health@1.0",
+        "android.hardware.health@2.0",
+    ],
+
+    header_libs: ["libhealthd_headers"],
+
+    // Uncomment the following to remove healthd from the build.
+    overrides: [
+        "healthd",
     ],
 }

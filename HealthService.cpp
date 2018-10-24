@@ -1,5 +1,6 @@
 /*
  * Copyright 2018 The Android Open Source Project
+ * Copyright 2018 GlobalLogic
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,28 +17,93 @@
 
 #define LOG_TAG "HealthHAL"
 
-#include <android/hardware/health/1.0/IHealth.h>
 #include <android-base/logging.h>
-#include <android-base/macros.h>
 
+#include <android/hardware/health/1.0/types.h>
+#include <hal_conversion.h>
+#include <HealthImpl.h>
+#include <healthd/healthd.h>
 #include <hidl/HidlTransportSupport.h>
 
-#include "Health.h"
-
+using android::hardware::IPCThreadState;
 using android::hardware::configureRpcThreadpool;
-using android::hardware::joinRpcThreadpool;
+using android::hardware::handleTransportPoll;
+using android::hardware::setupTransportPolling;
+using android::hardware::health::V2_0::HealthInfo;
+using android::hardware::health::V1_0::hal_conversion::convertToHealthInfo;
+using android::hardware::health::V2_0::IHealth;
+using android::hardware::health::V2_0::renesas::Health;
 
-using android::hardware::health::V1_0::IHealth;
-using android::hardware::health::V1_0::renesas::Health;
+extern int healthd_main(void);
 
-int main() {
+static int gBinderFd = -1;
+static std::string gInstanceName;
 
-    configureRpcThreadpool(1, true /* callerWillJoin */);
+static void binder_event(uint32_t /*epevents*/) {
+    if (gBinderFd >= 0) {
+        handleTransportPoll(gBinderFd);
+    }
+}
 
-    android::sp<IHealth> health = new Health;
+void healthd_mode_service_2_0_init(struct healthd_config* config) {
+    LOG(INFO) << LOG_TAG << gInstanceName << " Hal is starting up...";
 
-    android::status_t status = health->registerAsService();
-    LOG_ALWAYS_FATAL_IF(status != android::OK, "Could not register IHealth");
+    gBinderFd = setupTransportPolling();
 
-    joinRpcThreadpool();
+    if (gBinderFd >= 0) {
+        if (healthd_register_event(gBinderFd, binder_event)) {
+            LOG(ERROR) << LOG_TAG << gInstanceName << ": Register for binder events failed";
+        }
+    }
+
+    android::sp<IHealth> service = Health::initInstance(config);
+    CHECK_EQ(service->registerAsService(gInstanceName), android::OK)
+        << LOG_TAG << gInstanceName << ": Failed to register HAL";
+
+    LOG(INFO) << LOG_TAG << gInstanceName << ": Hal init done";
+}
+
+int healthd_mode_service_2_0_preparetowait(void) {
+    IPCThreadState::self()->flushCommands();
+    return -1;
+}
+
+void healthd_mode_service_2_0_heartbeat(void) {
+    // noop
+}
+
+void healthd_mode_service_2_0_battery_update(struct android::BatteryProperties* prop) {
+    HealthInfo info;
+    convertToHealthInfo(prop, info.legacy);
+    Health::getImplementation()->notifyListeners(&info);
+}
+
+static struct healthd_mode_ops healthd_mode_service_2_0_ops = {
+    .init = healthd_mode_service_2_0_init,
+    .preparetowait = healthd_mode_service_2_0_preparetowait,
+    .heartbeat = healthd_mode_service_2_0_heartbeat,
+    .battery_update = healthd_mode_service_2_0_battery_update,
+};
+
+void healthd_board_init(struct healthd_config*) {}
+
+int healthd_board_battery_update(struct android::BatteryProperties*) {
+    // return 0 to log periodic polled battery status to kernel log
+    return 0;
+}
+
+void get_storage_info(std::vector<struct StorageInfo>&) {
+    // ...
+}
+void get_disk_stats(std::vector<struct DiskStats>&) {
+    // ...
+}
+
+int main()
+{
+    if (gInstanceName.empty()) {
+        gInstanceName = "default";
+    }
+    healthd_mode_ops = &healthd_mode_service_2_0_ops;
+    return healthd_main();
 }
