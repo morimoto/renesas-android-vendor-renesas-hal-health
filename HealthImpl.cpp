@@ -32,6 +32,34 @@ namespace renesas {
 
 sp<Health> Health::instance_;
 
+static const int FAKE_CURRENT = 1000; /* uA */
+static const int FAKE_VOLTAGE = 12;   /* V */
+static const int FAKE_LEVEL   = 100;  /* percentage */
+
+static const V2_0::HealthInfo fakeHealthInfo {
+    .legacy = {
+        .chargerAcOnline       = true,
+        .chargerUsbOnline      = false,
+        .chargerWirelessOnline = false,
+        .maxChargingCurrent    = FAKE_CURRENT,
+        .maxChargingVoltage    = FAKE_VOLTAGE,
+        .batteryPresent        = true,
+        .batteryLevel          = FAKE_LEVEL,
+        .batteryVoltage        = FAKE_VOLTAGE,
+        .batteryTemperature    = 1,
+        .batteryCurrent        = FAKE_CURRENT,
+        .batteryCycleCount     = 1,
+        .batteryFullCharge     = FAKE_CURRENT,
+        .batteryChargeCounter  = FAKE_CURRENT,
+        .batteryStatus         = V1_0::BatteryStatus::FULL,
+        .batteryHealth         = V1_0::BatteryHealth::GOOD,
+        .batteryTechnology     = "AC Power",
+    },
+    .batteryCurrentAverage = FAKE_CURRENT,
+    .diskStats = std::vector<DiskStats>(),
+    .storageInfos = std::vector<StorageInfo>(),
+};
+
 Health::Health(struct healthd_config* c) {
     battery_monitor_ = std::make_unique<BatteryMonitor>();
     battery_monitor_->init(c);
@@ -138,28 +166,10 @@ Return<Result> Health::update() {
     return Result::SUCCESS;
 }
 
-void Health::notifyListeners(HealthInfo* healthInfo) {
-    std::vector<StorageInfo> info;
-    get_storage_info(info);
-
-    std::vector<DiskStats> stats;
-    get_disk_stats(stats);
-
-    int32_t currentAvg = 0;
-
-    struct BatteryProperty prop;
-    status_t ret = battery_monitor_->getProperty(BATTERY_PROP_CURRENT_AVG, &prop);
-    if (ret == OK) {
-        currentAvg = static_cast<int32_t>(prop.valueInt64);
-    }
-
-    healthInfo->batteryCurrentAverage = currentAvg;
-    healthInfo->diskStats = stats;
-    healthInfo->storageInfos = info;
-
+void Health::notifyListeners(HealthInfo* healthInfo __unused) {
     std::lock_guard<std::mutex> _lock(callbacks_lock_);
     for (auto it = callbacks_.begin(); it != callbacks_.end();) {
-        auto ret = (*it)->healthInfoChanged(*healthInfo);
+        auto ret = (*it)->healthInfoChanged(fakeHealthInfo);
         if (!ret.isOk() && ret.isDeadObject()) {
             it = callbacks_.erase(it);
         } else {
@@ -213,40 +223,7 @@ Return<void> Health::getDiskStats(getDiskStats_cb _hidl_cb) {
 }
 
 Return<void> Health::getHealthInfo(getHealthInfo_cb _hidl_cb) {
-    using android::hardware::health::V1_0::hal_conversion::convertToHealthInfo;
-
-    V1_0::HealthInfo batteryInfo{
-        .chargerAcOnline       = true,
-        .chargerUsbOnline      = false,
-        .chargerWirelessOnline = false,
-        .maxChargingCurrent    = 1,
-        .maxChargingVoltage    = 1,
-        .batteryPresent        = false,
-        .batteryLevel          = 100,
-        .batteryVoltage        = 1,
-        .batteryTemperature    = 1,
-        .batteryCurrent        = 1,
-        .batteryCycleCount     = 1,
-        .batteryFullCharge     = 1,
-        .batteryChargeCounter  = 1,
-        .batteryStatus         = android::hardware::health::V1_0::BatteryStatus::FULL,
-        .batteryHealth         = android::hardware::health::V1_0::BatteryHealth::GOOD,
-        .batteryTechnology     = "AC Power",
-    };
-
-    std::vector<StorageInfo> info;
-    get_storage_info(info);
-    std::vector<DiskStats> stats;
-    get_disk_stats(stats);
-    int32_t currentAvg = 1;
-
-    V2_0::HealthInfo healthInfo = {};
-    healthInfo.legacy = std::move(batteryInfo);
-    healthInfo.batteryCurrentAverage = currentAvg;
-    healthInfo.diskStats = stats;
-    healthInfo.storageInfos = info;
-
-    _hidl_cb(Result::SUCCESS, healthInfo);
+    _hidl_cb(Result::SUCCESS, fakeHealthInfo);
     return Void();
 }
 
