@@ -35,7 +35,6 @@ cc_binary {
     static_libs: [
         "android.hardware.health@1.0-convert",
         "libbatterymonitor",
-        "libbinder",
     ],
 
     shared_libs: [
