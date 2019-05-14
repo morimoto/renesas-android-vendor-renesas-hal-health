@@ -24,6 +24,7 @@
 #include <HealthImpl.h>
 #include <healthd/healthd.h>
 #include <hidl/HidlTransportSupport.h>
+#include <hwbinder/IPCThreadState.h>
 
 using android::hardware::IPCThreadState;
 using android::hardware::configureRpcThreadpool;
