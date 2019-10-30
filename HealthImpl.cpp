@@ -32,30 +32,13 @@ namespace renesas {
 
 sp<Health> Health::instance_;
 
-static const int FAKE_CURRENT = 1000; /* uA */
-static const int FAKE_VOLTAGE = 12;   /* V */
-static const int FAKE_LEVEL   = 100;  /* percentage */
-
 static const V2_0::HealthInfo fakeHealthInfo {
     .legacy = {
-        .chargerAcOnline       = true,
-        .chargerUsbOnline      = false,
-        .chargerWirelessOnline = false,
-        .maxChargingCurrent    = FAKE_CURRENT,
-        .maxChargingVoltage    = FAKE_VOLTAGE,
-        .batteryPresent        = true,
-        .batteryLevel          = FAKE_LEVEL,
-        .batteryVoltage        = FAKE_VOLTAGE,
-        .batteryTemperature    = 1,
-        .batteryCurrent        = FAKE_CURRENT,
-        .batteryCycleCount     = 1,
-        .batteryFullCharge     = FAKE_CURRENT,
-        .batteryChargeCounter  = FAKE_CURRENT,
-        .batteryStatus         = V1_0::BatteryStatus::FULL,
-        .batteryHealth         = V1_0::BatteryHealth::GOOD,
+        .batteryLevel          = 0,
+        .batteryStatus         = V1_0::BatteryStatus::UNKNOWN,
+        .batteryHealth         = V1_0::BatteryHealth::UNKNOWN,
         .batteryTechnology     = "AC Power",
     },
-    .batteryCurrentAverage = FAKE_CURRENT,
     .diskStats = std::vector<DiskStats>(),
     .storageInfos = std::vector<StorageInfo>(),
 };
