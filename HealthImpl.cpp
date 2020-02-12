@@ -34,6 +34,12 @@ sp<Health> Health::instance_;
 
 static const V2_0::HealthInfo fakeHealthInfo {
     .legacy = {
+        .chargerAcOnline       = true,
+        .maxChargingCurrent    = 5000000,
+        .maxChargingVoltage    = 12000000,
+        .batteryPresent        = false,
+        .batteryChargeCounter  = 1,
+        .batteryCurrent        = 0,
         .batteryLevel          = 0,
         .batteryStatus         = V1_0::BatteryStatus::UNKNOWN,
         .batteryHealth         = V1_0::BatteryHealth::UNKNOWN,
@@ -206,7 +212,11 @@ Return<void> Health::getDiskStats(getDiskStats_cb _hidl_cb) {
 }
 
 Return<void> Health::getHealthInfo(getHealthInfo_cb _hidl_cb) {
-    _hidl_cb(Result::SUCCESS, fakeHealthInfo);
+    V2_0::HealthInfo healthInfo(fakeHealthInfo);
+    std::vector<StorageInfo> info;
+    get_storage_info(info);
+    healthInfo.storageInfos = info;
+    _hidl_cb(Result::SUCCESS, healthInfo);
     return Void();
 }
 
