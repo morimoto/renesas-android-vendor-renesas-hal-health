@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2016 The Android Open Source Project
- * Copyright (C) 2018 GlobalLogic
+ * Copyright (C) 2020 GlobalLogic
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,44 +15,31 @@
  * limitations under the License.
  */
 
-cc_binary {
-    name: "android.hardware.health@2.0-service.renesas",
-    init_rc: ["android.hardware.health@2.0-service.renesas.rc"],
-    vintf_fragments: ["android.hardware.health@2.0-service.renesas.xml"],
+cc_library_shared {
+    name: "android.hardware.health@2.1-impl-renesas",
+    stem: "android.hardware.health@2.0-impl-2.1-renesas",
     proprietary: true,
+    recovery_available: true,
     relative_install_path: "hw",
     srcs: [
         "HealthImpl.cpp",
-        "HealthService.cpp",
-        "healthd_common.cpp",
-    ],
-
-    cflags: [
-        "-Wall",
-        "-Werror",
-        "-DHEALTHD_USE_HEALTH_2_0",
     ],
 
     static_libs: [
         "android.hardware.health@1.0-convert",
         "libbatterymonitor",
+        "libhealthloop",
+        "libhealth2impl",
     ],
 
     shared_libs: [
         "liblog",
         "libcutils",
-        "libdl",
         "libbase",
         "libutils",
-        "libhardware",
         "libhidlbase",
+        "android.hardware.health@2.1",
         "android.hardware.health@2.0",
     ],
 
-    header_libs: ["libhealthd_headers"],
-
-    // Uncomment the following to remove healthd from the build.
-    overrides: [
-        "healthd",
-    ],
 }

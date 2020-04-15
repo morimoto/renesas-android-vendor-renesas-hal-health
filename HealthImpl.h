@@ -1,77 +1,48 @@
-#ifndef ANDROID_HARDWARE_HEALTH_V2_0_HEALTH_H
-#define ANDROID_HARDWARE_HEALTH_V2_0_HEALTH_H
+/*
+ * Copyright (C) 2019 The Android Open Source Project
+ * Copyright (C) 2020 GlobalLogic
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
-#include <android/hardware/health/1.0/types.h>
-#include <android/hardware/health/2.0/IHealth.h>
+#include <android-base/unique_fd.h>
+#include <android/hardware/health/2.1/IHealth.h>
 #include <healthd/BatteryMonitor.h>
 #include <hidl/Status.h>
 
-using android::hardware::health::V2_0::StorageInfo;
-using android::hardware::health::V2_0::DiskStats;
-
-void get_storage_info(std::vector<struct StorageInfo>& info);
-void get_disk_stats(std::vector<struct DiskStats>& stats);
+#include <health2impl/Callback.h>
 
 namespace android {
 namespace hardware {
 namespace health {
-namespace V2_0 {
-namespace renesas {
+namespace V2_1 {
+namespace implementation {
 
-using V1_0::BatteryStatus;
-
-using ::android::hidl::base::V1_0::IBase;
-
-struct Health : public IHealth, hidl_death_recipient {
-   public:
-    static sp<IHealth> initInstance(struct healthd_config* c);
-    // Should only be called by implementation itself (-impl, -service).
-    // Clients should not call this function. Instead, initInstance() initializes and returns the
-    // global instance that has fewer functions.
-    // TODO(b/62229583): clean up and hide these functions after update() logic is simplified.
-    static sp<Health> getImplementation();
-
-    Health(struct healthd_config* c);
-
-    // TODO(b/62229583): clean up and hide these functions after update() logic is simplified.
-    void notifyListeners(HealthInfo* info);
-
-    // Methods from IHealth follow.
-    Return<Result> registerCallback(const sp<IHealthInfoCallback>& callback) override;
-    Return<Result> unregisterCallback(const sp<IHealthInfoCallback>& callback) override;
-    Return<Result> update() override;
-    Return<void> getChargeCounter(getChargeCounter_cb _hidl_cb) override;
-    Return<void> getCurrentNow(getCurrentNow_cb _hidl_cb) override;
-    Return<void> getCurrentAverage(getCurrentAverage_cb _hidl_cb) override;
-    Return<void> getCapacity(getCapacity_cb _hidl_cb) override;
-    Return<void> getEnergyCounter(getEnergyCounter_cb _hidl_cb) override;
-    Return<void> getChargeStatus(getChargeStatus_cb _hidl_cb) override;
+class HealthImpl : public Health {
+public:
+    HealthImpl(std::unique_ptr<healthd_config>&& config);
     Return<void> getStorageInfo(getStorageInfo_cb _hidl_cb) override;
-    Return<void> getDiskStats(getDiskStats_cb _hidl_cb) override;
-    Return<void> getHealthInfo(getHealthInfo_cb _hidl_cb) override;
-
-    // Methods from ::android::hidl::base::V1_0::IBase follow.
-    Return<void> debug(const hidl_handle& fd, const hidl_vec<hidl_string>& args) override;
-
-    void serviceDied(uint64_t cookie, const wp<IBase>& /* who */) override;
-
-   private:
-    static sp<Health> instance_;
-
-    std::mutex callbacks_lock_;
-    std::vector<sp<IHealthInfoCallback>> callbacks_;
-    std::unique_ptr<BatteryMonitor> battery_monitor_;
-
-    bool unregisterCallbackInternal(const sp<IBase>& cb);
+protected:
+    void UpdateHealthInfo(HealthInfo* health_info) override;
 };
 
-}  // namespace renesas
-}  // namespace V2_0
+}  // namespace implementation
+}  // namespace V2_1
 }  // namespace health
 }  // namespace hardware
 }  // namespace android
-
-#endif  // ANDROID_HARDWARE_HEALTH_V2_0_HEALTH_H

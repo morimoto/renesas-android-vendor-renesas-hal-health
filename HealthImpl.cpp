@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2018 The Android Open Source Project
+ * Copyright (C) 2020 GlobalLogic
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,26 +14,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define LOG_TAG "android.hardware.health@2.0-impl"
+
+#define LOG_TAG "android.hardware.health@2.1-impl-renesas"
 #include <android-base/logging.h>
 
-#include <android-base/file.h>
-#include <HealthImpl.h>
+#include <fstream>
+#include <string>
+#include <sys/types.h>
+#include <dirent.h>
+#include <memory>
+#include <string_view>
 
-#include <hal_conversion.h>
-#include <hidl/HidlTransportSupport.h>
+#include <health/utils.h>
+#include <health2impl/Health.h>
+#include <hidl/Status.h>
 
-extern void healthd_battery_update_internal(bool);
+#include "HealthImpl.h"
 
-namespace android {
-namespace hardware {
-namespace health {
-namespace V2_0 {
-namespace renesas {
+using ::android::sp;
+using ::android::hardware::Return;
+using ::android::hardware::Void;
+using ::android::hardware::health::V2_0::Result;
+using ::android::hardware::health::InitHealthdConfig;
+using ::android::hardware::health::V2_1::IHealth;
+using ::android::hidl::base::V1_0::IBase;
+using ::android::hardware::health::V2_0::StorageInfo;
+using ::android::hardware::health::V2_0::StorageAttribute;
+using ::android::hardware::health::V2_0::DiskStats;
+using ::android::hardware::health::V2_0::HealthInfo;
+using ::android::hardware::health::V1_0::BatteryStatus;
+using ::android::hardware::health::V1_0::BatteryHealth;
+using namespace std::literals;
 
-sp<Health> Health::instance_;
+static const std::string mmc_host_dir_name("/sys/class/mmc_host");
+static const std::string mmc_name_filename("name");
+static const std::string mmc_type_filename("type");
+static const std::string mmc_eol_filename("pre_eol_info");
+static const std::string mmc_lifetime_filename("life_time");
+static const std::string mmc_version_filename("rev");
+static const std::string mmc_internal_type("MMC");
+static const char path_separator = '/';
+static const char mmc_dir_prefix[] = "mmc";
+static const size_t mmc_dir_prefix_size = 3;
 
-static const V2_0::HealthInfo fakeHealthInfo {
+static const HealthInfo fakeHealthInfo {
     .legacy = {
         .chargerAcOnline       = true,
         .maxChargingCurrent    = 5000000,
@@ -41,153 +66,173 @@ static const V2_0::HealthInfo fakeHealthInfo {
         .batteryChargeCounter  = 1,
         .batteryCurrent        = 0,
         .batteryLevel          = 0,
-        .batteryStatus         = V1_0::BatteryStatus::UNKNOWN,
-        .batteryHealth         = V1_0::BatteryHealth::UNKNOWN,
+        .batteryStatus         = BatteryStatus::UNKNOWN,
+        .batteryHealth         = BatteryHealth::UNKNOWN,
         .batteryTechnology     = "AC Power",
     },
     .diskStats = std::vector<DiskStats>(),
     .storageInfos = std::vector<StorageInfo>(),
 };
 
-Health::Health(struct healthd_config* c) {
-    battery_monitor_ = std::make_unique<BatteryMonitor>();
-    battery_monitor_->init(c);
-}
-
-// Methods from IHealth follow.
-Return<Result> Health::registerCallback(const sp<IHealthInfoCallback>& callback) {
-    if (callback == nullptr) {
-        return Result::SUCCESS;
+void process_directory(std::string directory, std::vector<std::string>& pathes) {
+    std::string dir_to_open = mmc_host_dir_name + path_separator + directory;
+    auto dir = opendir(dir_to_open.c_str());
+    if (dir == NULL) {
+        LOG(ERROR) << LOG_TAG << " Cannot open dir: " << dir_to_open;
+        return;
     }
-
-    {
-        std::lock_guard<std::mutex> _lock(callbacks_lock_);
-        callbacks_.push_back(callback);
-        // unlock
-    }
-
-    auto linkRet = callback->linkToDeath(this, 0u /* cookie */);
-    if (!linkRet.withDefault(false)) {
-        LOG(WARNING) << __func__ << "Cannot link to death: "
-                     << (linkRet.isOk() ? "linkToDeath returns false" : linkRet.description());
-        // ignore the error
-    }
-
-    return update();
-}
-
-bool Health::unregisterCallbackInternal(const sp<IBase>& callback) {
-    if (callback == nullptr) {
-        return false;
-    }
-
-    bool removed = false;
-    std::lock_guard<std::mutex> _lock(callbacks_lock_);
-    for (auto it = callbacks_.begin(); it != callbacks_.end();) {
-        if (interfacesEqual(*it, callback)) {
-            it = callbacks_.erase(it);
-            removed = true;
-        } else {
-            ++it;
+    struct dirent* entity = NULL;
+    while ((entity = readdir(dir)) != NULL) {
+        if (strncmp(entity->d_name, mmc_dir_prefix, mmc_dir_prefix_size) == 0) {
+            std::string name = dir_to_open + path_separator + std::string(entity->d_name);
+            LOG(DEBUG) << LOG_TAG << " found MMC " << name;
+            pathes.push_back(name);
+            break;
         }
     }
-    (void)callback->unlinkToDeath(this).isOk();  // ignore errors
-    return removed;
-}
-
-Return<Result> Health::unregisterCallback(const sp<IHealthInfoCallback>& callback) {
-    return unregisterCallbackInternal(callback) ? Result::SUCCESS : Result::NOT_FOUND;
-}
-
-template <typename T>
-void getProperty(const std::unique_ptr<BatteryMonitor>& monitor __unused,
-                 int id __unused, T defaultValue,
-                 const std::function<void(Result, T)>& callback) {
-    T ret = defaultValue;
-    Result result = Result::SUCCESS;
-    callback(result, static_cast<T>(ret));
-}
-
-Return<void> Health::getChargeCounter(getChargeCounter_cb _hidl_cb) {
-    getProperty<int32_t>(battery_monitor_, BATTERY_PROP_CHARGE_COUNTER, 1, _hidl_cb);
-    return Void();
-}
-
-Return<void> Health::getCurrentNow(getCurrentNow_cb _hidl_cb) {
-    getProperty<int32_t>(battery_monitor_, BATTERY_PROP_CURRENT_NOW, 1, _hidl_cb);
-    return Void();
-}
-
-Return<void> Health::getCurrentAverage(getCurrentAverage_cb _hidl_cb) {
-    getProperty<int32_t>(battery_monitor_, BATTERY_PROP_CURRENT_AVG, 1, _hidl_cb);
-    return Void();
-}
-
-Return<void> Health::getCapacity(getCapacity_cb _hidl_cb) {
-    getProperty<int32_t>(battery_monitor_, BATTERY_PROP_CAPACITY, 1, _hidl_cb);
-    return Void();
-}
-
-Return<void> Health::getEnergyCounter(getEnergyCounter_cb _hidl_cb) {
-    getProperty<int64_t>(battery_monitor_, BATTERY_PROP_ENERGY_COUNTER, 1, _hidl_cb);
-    return Void();
-}
-
-Return<void> Health::getChargeStatus(getChargeStatus_cb _hidl_cb) {
-    getProperty(battery_monitor_, BATTERY_PROP_BATTERY_STATUS, BatteryStatus::FULL, _hidl_cb);
-    return Void();
-}
-
-Return<Result> Health::update() {
-    if (!healthd_mode_ops || !healthd_mode_ops->battery_update) {
-        LOG(WARNING) << "health@2.0: update: not initialized. "
-                     << "update() should not be called in charger / recovery.";
-        return Result::UNKNOWN;
+    if (closedir(dir) != 0) {
+        LOG(ERROR) << LOG_TAG << " Cannot close dir: " << dir_to_open;
     }
-
-    // Retrieve all information and call healthd_mode_ops->battery_update, which calls
-    // notifyListeners.
-    bool chargerOnline = battery_monitor_->update();
-
-    // adjust uevent / wakealarm periods
-    healthd_battery_update_internal(chargerOnline);
-
-    return Result::SUCCESS;
 }
 
-void Health::notifyListeners(HealthInfo* healthInfo __unused) {
-    std::lock_guard<std::mutex> _lock(callbacks_lock_);
-    for (auto it = callbacks_.begin(); it != callbacks_.end();) {
-        auto ret = (*it)->healthInfoChanged(fakeHealthInfo);
-        if (!ret.isOk() && ret.isDeadObject()) {
-            it = callbacks_.erase(it);
-        } else {
-            ++it;
+void process_entity(struct dirent* entity, std::vector<std::string>& pathes) {
+    if (entity->d_type == DT_DIR || entity->d_type == DT_LNK) {
+        if (strncmp(entity->d_name, mmc_dir_prefix, mmc_dir_prefix_size) == 0) {
+            LOG(VERBOSE) << LOG_TAG << " " << std::string(entity->d_name);
+            process_directory(std::string(entity->d_name), pathes);
         }
+        return;
+    }
+
+}
+
+bool find_mmcs(std::vector<std::string>& pathes) {
+    auto dir = opendir(mmc_host_dir_name.c_str());
+    if (dir == NULL) {
+        LOG(ERROR) << LOG_TAG << " Cannot open dir: " << mmc_host_dir_name;
+        return 1;
+    }
+    struct dirent* entity = NULL;
+    while ((entity = readdir(dir)) != NULL) {
+        process_entity(entity, pathes);
+    }
+    if (closedir(dir) != 0) {
+        LOG(ERROR) << LOG_TAG << " Cannot close dir: " << mmc_host_dir_name;
+    }
+    return pathes.size() == 0;
+}
+
+std::string read_file(const std::string& filename) {
+    std::ifstream fs;
+    std::string tmp;
+    fs.open(filename);
+    getline(fs, tmp);
+    fs.close();
+    if (tmp.length() == 0) {
+        LOG(WARNING) << LOG_TAG << " File " << filename << " doesn't exist";
+    }
+    return tmp;
+}
+
+std::string get_mmc_name(const std::string& path) {
+    return read_file(path + path_separator + mmc_name_filename);
+}
+
+std::string get_mmc_type(const std::string& path) {
+    return read_file(path + path_separator + mmc_type_filename);
+}
+
+StorageAttribute get_mmc_attr(const std::string& path) {
+    StorageAttribute attr;
+
+    attr.name = get_mmc_name(path);
+
+    std::string type = get_mmc_type(path);
+    if (type.compare(mmc_internal_type) == 0) {
+        attr.isInternal = true;
+        attr.isBootDevice = true;
+    } else {
+        attr.isInternal = false;
+        attr.isBootDevice = false;
+    }
+    return attr;
+}
+
+uint16_t get_mmc_eol(const std::string& path) {
+    uint16_t eol {0};
+    std::string tmp = read_file(path + path_separator + mmc_eol_filename);
+
+    if (tmp.length() != 0) {
+        eol = std::stoi(tmp, nullptr, 16);
+    }
+
+    return eol;
+}
+
+std::pair<uint16_t, uint16_t> get_mmc_lifetime(const std::string& path) {
+    size_t idx {0};
+    uint16_t lifetimeA {0};
+    uint16_t lifetimeB {0};
+    std::string tmp = read_file(path + path_separator + mmc_lifetime_filename);
+
+    if (tmp.length() != 0) {
+        lifetimeA = std::stoi(tmp, &idx, 16);
+        lifetimeB = std::stoi(tmp, &idx, 16);
+    }
+
+    return {lifetimeA, lifetimeB};
+}
+
+std::string get_mmc_version(const std::string& path) {
+    return read_file(path + path_separator + mmc_version_filename);
+}
+
+StorageInfo get_info(const std::string& path) {
+    StorageInfo si;
+
+    si.attr = get_mmc_attr(path);
+    si.eol = get_mmc_eol(path);
+
+    std::pair<uint16_t, uint16_t> life_time = get_mmc_lifetime(path);
+    si.lifetimeA = life_time.first;
+    si.lifetimeB = life_time.second;
+
+    si.version = get_mmc_version(path);
+
+    return si;
+}
+
+void get_storage_info(std::vector<StorageInfo>& v) {
+    std::vector<std::string> mmc_pathes;
+    if (find_mmcs(mmc_pathes)) {
+        LOG(ERROR) << LOG_TAG << " MMC Read ERROR!";
+        return;
+    }
+    for (auto& p : mmc_pathes) {
+        StorageInfo si = get_info(p);
+        v.push_back(si);
     }
 }
 
-Return<void> Health::debug(const hidl_handle& handle, const hidl_vec<hidl_string>&) {
-    if (handle != nullptr && handle->numFds >= 1) {
-        int fd = handle->data[0];
-        battery_monitor_->dumpState(fd);
+namespace android {
+namespace hardware {
+namespace health {
+namespace V2_1 {
+namespace implementation {
 
-        getHealthInfo([fd](auto res, const auto& info) {
-            android::base::WriteStringToFd("\ngetHealthInfo -> ", fd);
-            if (res == Result::SUCCESS) {
-                android::base::WriteStringToFd(toString(info), fd);
-            } else {
-                android::base::WriteStringToFd(toString(res), fd);
-            }
-            android::base::WriteStringToFd("\n", fd);
-        });
-
-        fsync(fd);
-    }
-    return Void();
+template <typename T, typename Method>
+static inline void GetHealthInfoField(Health* service, Method func, T* out) {
+    *out = T{};
+    std::invoke(func, service, [out](Result result, const T& value) {
+        if (result == Result::SUCCESS) {
+            *out = value;
+        }
+    });
 }
+HealthImpl::HealthImpl(std::unique_ptr<healthd_config>&& config)
+    : Health(std::move(config)) {}
 
-Return<void> Health::getStorageInfo(getStorageInfo_cb _hidl_cb) {
+Return<void> HealthImpl::getStorageInfo(getStorageInfo_cb _hidl_cb) {
     std::vector<struct StorageInfo> info;
     get_storage_info(info);
     hidl_vec<struct StorageInfo> info_vec(info);
@@ -196,48 +241,33 @@ Return<void> Health::getStorageInfo(getStorageInfo_cb _hidl_cb) {
     } else {
         _hidl_cb(Result::SUCCESS, info_vec);
     }
+
     return Void();
 }
+void HealthImpl::UpdateHealthInfo(HealthInfo* health_info) {
+    health_info->legacy = fakeHealthInfo;
 
-Return<void> Health::getDiskStats(getDiskStats_cb _hidl_cb) {
-    std::vector<struct DiskStats> stats;
-    get_disk_stats(stats);
-    hidl_vec<struct DiskStats> stats_vec(stats);
-    if (!stats.size()) {
-        _hidl_cb(Result::NOT_SUPPORTED, stats_vec);
-    } else {
-        _hidl_cb(Result::SUCCESS, stats_vec);
-    }
-    return Void();
+    GetHealthInfoField(this, &Health::getStorageInfo, &health_info->legacy.storageInfos);
+    GetHealthInfoField(this, &Health::getDiskStats, &health_info->legacy.diskStats);
+
+    health_info->batteryCapacityLevel = BatteryCapacityLevel::UNKNOWN;
+    health_info->batteryChargeTimeToFullNowSeconds = 0;
+    health_info->batteryFullChargeDesignCapacityUah = 0;
 }
 
-Return<void> Health::getHealthInfo(getHealthInfo_cb _hidl_cb) {
-    V2_0::HealthInfo healthInfo(fakeHealthInfo);
-    std::vector<StorageInfo> info;
-    get_storage_info(info);
-    healthInfo.storageInfos = info;
-    _hidl_cb(Result::SUCCESS, healthInfo);
-    return Void();
-}
-
-void Health::serviceDied(uint64_t /* cookie */, const wp<IBase>& who) {
-    (void)unregisterCallbackInternal(who.promote());
-}
-
-sp<IHealth> Health::initInstance(struct healthd_config* c) {
-    if (instance_ == nullptr) {
-        instance_ = new Health(c);
-    }
-    return instance_;
-}
-
-sp<Health> Health::getImplementation() {
-    CHECK(instance_ != nullptr);
-    return instance_;
-}
-
-}  // namespace renesas
-}  // namespace V2_0
+}  // namespace implementation
+}  // namespace V2_1
 }  // namespace health
 }  // namespace hardware
 }  // namespace android
+
+extern "C" IHealth* HIDL_FETCH_IHealth(const char* instance) {
+    using ::android::hardware::health::V2_1::implementation::HealthImpl;
+    if (instance != "default"sv) {
+        return nullptr;
+    }
+    auto config = std::make_unique<healthd_config>();
+    InitHealthdConfig(config.get());
+
+    return new HealthImpl(std::move(config));
+}
